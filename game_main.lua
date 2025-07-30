@@ -108,7 +108,7 @@ local function createGameSystems()
         end
     end, 10)
     
-    -- Sistema de colisão
+    -- Sistema de colisão - CORRIGIDO
     ecs:addSystem("collision", function(dt, ecsInstance)
         local entities = ecsInstance:getEntitiesWith("Transform", "Collider")
         
@@ -129,99 +129,52 @@ local function createGameSystems()
                 local minDistance = colliderA.radius + colliderB.radius
                 
                 if distance < minDistance and distance > 0 then
-                    -- Trigger ou colisão física
-                    if colliderA.trigger or colliderB.trigger then
-                        EventBus:emit("collision:trigger", {
-                            entityA = entityA,
-                            entityB = entityB
-                        })
-                    else
-                        -- Separar entidades
-                        local separationX = (dx / distance) * (minDistance - distance) * 0.5
-                        local separationY = (dy / distance) * (minDistance - distance) * 0.5
-                        
-                        transformA.x = transformA.x - separationX
-                        transformA.y = transformA.y - separationY
-                        transformB.x = transformB.x + separationX
-                        transformB.y = transformB.y + separationY
-                    end
-                end
-            end
-        end
-    end, 20)
-    
-    -- Sistema de renderização
-    ecs:addSystem("render", function(dt, ecsInstance)
-        local entities = ecsInstance:getEntitiesWith("Transform", "Sprite")
-        
-        for _, entity in ipairs(entities) do
-            local transform = ecsInstance:getComponent(entity, "Transform")
-            local sprite = ecsInstance:getComponent(entity, "Sprite")
-            
-            -- Usar textura gerada se disponível
-            if sprite.texture then
-                local screenX = (transform.x - camera.x) * camera.scale + love.graphics.getWidth() / 2
-                local screenY = (transform.y - camera.y) * camera.scale + love.graphics.getHeight() / 2
-                
-                love.graphics.draw(sprite.texture, screenX, screenY, 
-                    transform.rotation, camera.scale, camera.scale,
-                    sprite.size / 2, sprite.size / 2)
-            else
-                -- Fallback para retângulo simples
-                self:drawSimpleSprite(entity, transform, sprite)
-            end
-        end
-    end, 100)
-    
-    -- Sistema de AI simples
-    ecs:addSystem("ai", function(dt, ecsInstance)
-        local entities = ecsInstance:getEntitiesWith("Transform", "AI", "Velocity")
-        
-        for _, entity in ipairs(entities) do
-            local transform = ecsInstance:getComponent(entity, "Transform")
-            local ai = ecsInstance:getComponent(entity, "AI")
-            local velocity = ecsInstance:getComponent(entity, "Velocity")
-            
-            if ai.type == "wanderer" then
-                -- Movimento aleatório
-                if math.random() < 0.02 then -- 2% chance por frame
-                    local angle = math.random() * 2 * math.pi
-                    velocity.vx = math.cos(angle) * 30
-                    velocity.vy = math.sin(angle) * 30
-                end
-            elseif ai.type == "guard" then
-                -- Detectar slime próximo
-                local slimes = ecsInstance:getEntitiesWith("SlimeCore", "Transform")
-                if #slimes > 0 then
-                    local slimeTransform = ecsInstance:getComponent(slimes[1], "Transform")
-                    local dx = slimeTransform.x - transform.x
-                    local dy = slimeTransform.y - transform.y
-                    local distance = math.sqrt(dx * dx + dy * dy)
+                    -- Separar entidades colidindo
+                    local overlap = minDistance - distance
+                    local separateX = (dx / distance) * (overlap / 2)
+                    local separateY = (dy / distance) * (overlap / 2)
                     
-                    if distance < ai.alertRadius then
-                        ai.state = "alert"
-                        ai.target = slimes[1]
-                        
-                        -- Mover em direção ao slime
-                        if distance > ai.attackRadius then
-                            velocity.vx = (dx / distance) * velocity.maxSpeed
-                            velocity.vy = (dy / distance) * velocity.maxSpeed
-                        end
-                    else
-                        ai.state = "idle"
-                        ai.target = nil
+                    transformA.x = transformA.x - separateX
+                    transformA.y = transformA.y - separateY
+                    transformB.x = transformB.x + separateX
+                    transformB.y = transformB.y + separateY
+                    
+                    -- Trigger eventos de colisão se necessário
+                    if ecsInstance:hasComponent(entityA, "SlimeCore") and ecsInstance:hasComponent(entityB, "Enemy") then
+                        Logger:debug("Slime colidiu com inimigo")
                     end
                 end
             end
         end
-    end, 30)
+    end, 11)
     
-    -- Sistema de combate integrado
-    ecs:addSystem("combat", function(dt, ecsInstance)
-        if combat then
-            combat:update(dt, ecsInstance)
+    -- Sistema de colisão com mundo - CORRIGIDO
+    ecs:addSystem("world_collision", function(dt, ecsInstance)
+        local entities = ecsInstance:getEntitiesWith("Transform", "Velocity", "Collider")
+        
+        for _, entity in ipairs(entities) do
+            local transform = ecsInstance:getComponent(entity, "Transform")
+            local velocity = ecsInstance:getComponent(entity, "Velocity")
+            local collider = ecsInstance:getComponent(entity, "Collider")
+            
+            -- Calcular nova posição
+            local newX = transform.x + velocity.vx * dt
+            local newY = transform.y + velocity.vy * dt
+            
+            -- ✅ USAR FUNÇÃO LOCAL EM VEZ DE self:
+            if not checkWorldCollision(newX, transform.y, collider.radius, world) then
+                transform.x = newX
+            else
+                velocity.vx = velocity.vx * -0.3 -- Bounce na parede
+            end
+            
+            if not checkWorldCollision(transform.x, newY, collider.radius, world) then
+                transform.y = newY
+            else
+                velocity.vy = velocity.vy * -0.3 -- Bounce na parede
+            end
         end
-    end, 35)
+    end, 12)
 end
 
 local function generateSpriteForEntity(entity, entityType)
@@ -862,6 +815,51 @@ function love.keypressed(key)
         app:keypressed(key)
     end
 end
+
+local function checkWorldCollision(x, y, radius, world)
+    if not world then return false end
+    
+    local tileSize = 32
+    local margin = radius + 2
+    
+    -- Verificar tiles ao redor da posição
+    local minTileX = math.floor((x - margin) / tileSize)
+    local maxTileX = math.floor((x + margin) / tileSize)
+    local minTileY = math.floor((y - margin) / tileSize)
+    local maxTileY = math.floor((y + margin) / tileSize)
+    
+    for tileY = minTileY, maxTileY do
+        for tileX = minTileX, maxTileX do
+            local tile = world:getTileAt(tileX, tileY)
+            
+            if tile == 2 then -- WALL
+                -- Verificar colisão círculo-retângulo
+                local tileWorldX = tileX * tileSize
+                local tileWorldY = tileY * tileSize
+                
+                if circleRectCollision(x, y, radius, 
+                                     tileWorldX, tileWorldY, tileSize, tileSize) then
+                    return true
+                end
+            end
+        end
+    end
+    
+    return false
+end
+
+local function circleRectCollision(circleX, circleY, radius, rectX, rectY, rectW, rectH)
+    -- Encontrar ponto mais próximo do retângulo ao círculo
+    local closestX = math.max(rectX, math.min(circleX, rectX + rectW))
+    local closestY = math.max(rectY, math.min(circleY, rectY + rectH))
+    
+    -- Calcular distância
+    local dx = circleX - closestX
+    local dy = circleY - closestY
+    
+    return (dx * dx + dy * dy) < (radius * radius)
+end
+
 
 function love.mousepressed(x, y, button)
     -- Primeiro verificar se UI capturou o clique

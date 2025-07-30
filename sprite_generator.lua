@@ -1528,16 +1528,67 @@ function love.load()
 end
 
 function love.update(dt)
-    animation:update(dt)
+    if animation then
+        animation:update(dt)
+    end
 end
+
+function love.draw()
+    if ui then
+        ui:draw()
+    end
+end
+
+-- ⚠️ AQUI ESTÃO AS CORREÇÕES PRINCIPAIS:
+function love.mousepressed(x, y, button) 
+    if ui then -- ← VERIFICAÇÃO CRUCIAL
+        ui:mousepressed(x, y, button)
+    end
+end
+
+function love.mousereleased(x, y, button) 
+    if ui then -- ← VERIFICAÇÃO CRUCIAL
+        ui:mousereleased(x, y, button)
+    end
+end
+
+function love.mousemoved(x, y) 
+    if ui then -- ← VERIFICAÇÃO CRUCIAL
+        ui:mousemoved(x, y)
+    end
+end
+
 
 function love.draw()
     ui:draw()
 end
-
-function love.mousepressed(x,y,button) ui:mousepressed(x,y,button) end
-function love.mousereleased(x,y,button) ui:mousereleased(x,y,button) end
-function love.mousemoved(x,y) ui:mousemoved(x,y) end
 function love.keypressed(key)
-    if key == "space" then ui:generateNewSprite() elseif key == "r" then ui:randomizeSettings() elseif key == "s" then ui:saveSprite() elseif key == "a" then ui:saveSpriteSheet() elseif key == "return" then ui:batchGenerate() elseif key == "tab" then local dd = ui.controls.spriteType; dd.selected = dd.selected % #dd.options + 1 elseif tonumber(key) and tonumber(key) >= 1 and tonumber(key) <= 9 then if love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift") then preset:savePreset(tonumber(key), settings) else local loaded = preset:loadPreset(tonumber(key)); if loaded then settings = loaded; print("Loaded preset " .. key) end end end
-end 
+    if not ui then return end -- ← VERIFICAÇÃO CRUCIAL
+    
+    if key == "space" then 
+        ui:generateNewSprite() 
+    elseif key == "r" then 
+        ui:randomizeSettings() 
+    elseif key == "s" then 
+        ui:saveSprite() 
+    elseif key == "a" then 
+        ui:saveSpriteSheet() 
+    elseif key == "return" then 
+        ui:batchGenerate() 
+    elseif key == "tab" then 
+        local dd = ui.controls.spriteType
+        if dd then
+            dd.selected = dd.selected % #dd.options + 1
+        end
+    elseif tonumber(key) and tonumber(key) >= 1 and tonumber(key) <= 9 then 
+        if love.keyboard.isDown("lshift") or love.keyboard.isDown("rshift") then 
+            preset:savePreset(tonumber(key), settings) 
+        else 
+            local loaded = preset:loadPreset(tonumber(key))
+            if loaded then 
+                settings = loaded
+                print("Loaded preset " .. key) 
+            end 
+        end 
+    end
+end
