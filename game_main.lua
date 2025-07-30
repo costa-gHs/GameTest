@@ -11,6 +11,7 @@ local CombatSystem = require("src.combat.combat")
 local SkillSystem = require("src.gameplay.skills")
 local UIManager = require("src.render.ui")
 local Logger = require("src.core.logger")
+local SpriteGenerator = require("sprite_generator")
 
 -- Importar gerador de sprites existente
 local SpriteGenerator = require("sprite_module")
@@ -153,79 +154,23 @@ local function createGameSystems()
     ecs:addSystem("render", function(dt, ecsInstance)
         local entities = ecsInstance:getEntitiesWith("Transform", "Sprite")
         
-        -- Log a cada 5 segundos
-        if not renderLogTimer then renderLogTimer = 0 end
-        renderLogTimer = renderLogTimer + dt
-        if renderLogTimer >= 5 then
-            Logger:info("🎨 Renderizando entidades", {count = #entities})
-            renderLogTimer = 0
-        end
-        
-        -- Debug: mostrar número de entidades sendo renderizadas
-        if love.keyboard.isDown("f2") then
-            Logger:debug("Renderizando entidades", {count = #entities})
-        end
-        
-        -- Ordenar por Y para depth sorting
-        table.sort(entities, function(a, b)
-            local transformA = ecsInstance:getComponent(a, "Transform")
-            local transformB = ecsInstance:getComponent(b, "Transform")
-            return transformA.y < transformB.y
-        end)
-        
         for _, entity in ipairs(entities) do
             local transform = ecsInstance:getComponent(entity, "Transform")
             local sprite = ecsInstance:getComponent(entity, "Sprite")
             
-            if not transform or not sprite then
-                Logger:warn("Entidade sem Transform ou Sprite", {entity = entity})
-                goto continue
-            end
-            
-            -- Aplicar transformação da câmera
-            local screenX = (transform.x - camera.x) * camera.scale + love.graphics.getWidth() / 2
-            local screenY = (transform.y - camera.y) * camera.scale + love.graphics.getHeight() / 2
-            
-            -- Renderizar sprite
-            love.graphics.setColor(sprite.color or {1, 1, 1, 1})
-            
+            -- Usar textura gerada se disponível
             if sprite.texture then
-                -- Usar textura se disponível
+                local screenX = (transform.x - camera.x) * camera.scale + love.graphics.getWidth() / 2
+                local screenY = (transform.y - camera.y) * camera.scale + love.graphics.getHeight() / 2
+                
                 love.graphics.draw(sprite.texture, screenX, screenY, 
-                    transform.rotation, camera.scale * transform.scale, camera.scale * transform.scale,
+                    transform.rotation, camera.scale, camera.scale,
                     sprite.size / 2, sprite.size / 2)
             else
-                -- Desenhar retângulo simples com borda
-                local size = sprite.size * camera.scale * transform.scale
-                local x = screenX - size / 2
-                local y = screenY - size / 2
-                
-                -- Desenhar preenchimento
-                love.graphics.rectangle("fill", x, y, size, size)
-                
-                -- Desenhar borda
-                love.graphics.setColor(0, 0, 0, 1)
-                love.graphics.rectangle("line", x, y, size, size)
-                love.graphics.setColor(sprite.color or {1, 1, 1, 1})
+                -- Fallback para retângulo simples
+                self:drawSimpleSprite(entity, transform, sprite)
             end
-            
-            -- Debug: mostrar ID da entidade
-            if love.keyboard.isDown("f3") then
-                love.graphics.setColor(1, 1, 1, 1)
-                love.graphics.print(tostring(entity), screenX + 10, screenY - 10)
-            end
-            
-            -- Indicador especial para slime
-            if ecsInstance:hasComponent(entity, "SlimeCore") then
-                love.graphics.setColor(1, 1, 0, 1) -- Amarelo
-                love.graphics.circle("line", screenX, screenY, 20)
-                love.graphics.print("SLIME", screenX - 20, screenY - 30)
-            end
-            
-            ::continue::
         end
-        
-        love.graphics.setColor(1, 1, 1, 1)
     end, 100)
     
     -- Sistema de AI simples
@@ -277,6 +222,42 @@ local function createGameSystems()
             combat:update(dt, ecsInstance)
         end
     end, 35)
+end
+
+local function generateSpriteForEntity(entity, entityType)
+    local settings = {
+        spriteType = entityType == "slime" and "character" or "character",
+        size = entityType == "slime" and 16 or 12,
+        paletteType = "NES",
+        complexity = entityType == "slime" and 60 or 40,
+        symmetry = "vertical",
+        colorCount = entityType == "slime" and 6 or 4,
+        visualSeed = entity.id * 123 + love.timer.getTime(),
+        structureSeed = entity.id * 456,
+        class = entityType == "slime" and "mage" or "warrior",
+        outline = true,
+        silhouetteStyle = entityType == "slime" and "chibi" or "heroic"
+    }
+    
+    -- Usar o gerador real
+    local spriteData = SpriteGenerator:generate(settings)
+    
+    if spriteData then
+        -- Converter para textura LÖVE 2D
+        local size = #spriteData
+        local imageData = love.image.newImageData(size, size)
+        
+        for y = 1, size do
+            for x = 1, size do
+                local pixel = spriteData[y][x]
+                imageData:setPixel(x - 1, y - 1, pixel[1], pixel[2], pixel[3], pixel[4])
+            end
+        end
+        
+        return love.graphics.newImage(imageData)
+    end
+    
+    return nil
 end
 
 -- Sistema de input do jogador
@@ -619,28 +600,18 @@ function love.draw()
     love.graphics.setColor(0.2, 0.2, 0.3, 1)
     love.graphics.rectangle("fill", 0, 0, love.graphics.getWidth(), love.graphics.getHeight())
     
-    -- Desenhar mundo procedural
     if world then
         love.graphics.push()
         love.graphics.translate(-camera.x * camera.scale + love.graphics.getWidth() / 2, 
                                -camera.y * camera.scale + love.graphics.getHeight() / 2)
         love.graphics.scale(camera.scale)
         
-        -- Desenhar grade de debug
-        love.graphics.setColor(0.3, 0.3, 0.4, 1)
-        local gridSize = 64
-        for x = -10, 10 do
-            for y = -10, 10 do
-                love.graphics.rectangle("line", x * gridSize, y * gridSize, gridSize, gridSize)
-            end
-        end
-        
-        -- Desenhar tiles do mundo
         drawWorldTiles()
         
         love.graphics.pop()
     end
-    
+    ecs:update(0) -- Apenas renderização
+ 
     -- Renderizar entidades manualmente (para debug)
     local entities = ecs:getEntitiesWith("Transform", "Sprite")
     Logger:debug("Renderizando entidades manualmente", {count = #entities})
@@ -681,7 +652,6 @@ function love.draw()
     
     love.graphics.setColor(1, 1, 1, 1)
     
-    -- Desenhar efeitos de combate
     if combat then
         love.graphics.push()
         love.graphics.translate(-camera.x * camera.scale + love.graphics.getWidth() / 2, 
@@ -693,7 +663,7 @@ function love.draw()
         love.graphics.pop()
     end
     
-    -- UI nova
+    -- USAR UI do sistema (não debug info manual)
     if ui then
         ui:draw("playing")
     end
@@ -759,14 +729,67 @@ function love.draw()
     love.graphics.setColor(1, 1, 1, 1)
 end
 
+local function addWorldCollisionSystem()
+    ecs:addSystem("world_collision", function(dt, ecsInstance)
+        local entities = ecsInstance:getEntitiesWith("Transform", "Velocity", "Collider")
+        
+        for _, entity in ipairs(entities) do
+            local transform = ecsInstance:getComponent(entity, "Transform")
+            local velocity = ecsInstance:getComponent(entity, "Velocity")
+            local collider = ecsInstance:getComponent(entity, "Collider")
+            
+            -- Calcular nova posição
+            local newX = transform.x + velocity.vx * dt
+            local newY = transform.y + velocity.vy * dt
+            
+            -- Verificar colisão com tiles do mundo
+            local tileSize = 32
+            local gridX = math.floor(newX / tileSize)
+            local gridY = math.floor(newY / tileSize)
+            
+            if world and world:getTileAt(gridX, gridY) == 2 then -- WALL
+                -- Colidir com parede - parar movimento
+                velocity.vx = velocity.vx * -0.5
+                velocity.vy = velocity.vy * -0.5
+            else
+                -- Movimento livre
+                transform.x = newX
+                transform.y = newY
+            end
+        end
+    end, 15) -- Antes do movimento normal
+end
 
 
 function love.keypressed(key)
     Logger:debug("Tecla pressionada", {key = key})
-    
+    if ui and ui:keypressed(key) then
+        return -- UI capturou input
+    end    
     if key == "escape" then
         Logger:info("🚪 Saindo do jogo...")
         love.event.quit()
+    elseif key == "space" then
+        -- Predação via sistema integrado
+        local slimes = ecs:getEntitiesWith("SlimeCore", "Transform")
+        if #slimes > 0 and app and app.slime then
+            local transform = ecs:getComponent(slimes[1], "Transform")
+            local success, msg = app.slime:tryPredation(transform.x, transform.y)
+            if ui then 
+                ui:addNotification(msg, success and UIColors.success or UIColors.error, 2.0) 
+            end
+        end
+    
+    elseif key == "a" then
+        -- Análise via sistema integrado
+        local slimes = ecs:getEntitiesWith("SlimeCore")
+        if #slimes > 0 and app and app.slime then
+            local success, msg = app.slime:startAnalysis()
+            if ui then 
+                ui:addNotification(msg, success and UIColors.success or UIColors.error, 2.0) 
+            end
+        end
+    
     elseif key == "f4" then
         -- Salvar logs
         Logger:info("💾 Salvando logs...")
